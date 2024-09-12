@@ -48,3 +48,69 @@ weighted avg       0.98      0.97      0.97       241
 ```
 
 
+### TODO
+
+- tweak numbers, see if we can improve
+- try a model with dna meth dataset
+- how to measure? Some ideas
+
+**NOTE**: All untested, just grabbed some snippets of the net, give them a try or research some others.
+
+
+#### Confusion Matrix
+
+```py
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.metrics import confusion_matrix
+
+# Compute confusion matrix
+cm = confusion_matrix(y_test, y_pred)
+
+# Create a heatmap
+plt.figure(figsize=(8, 6))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=['Solid Tissue Normal', 'Primary Tumor'], yticklabels=['Solid Tissue Normal', 'Primary Tumor'])
+plt.ylabel('Actual')
+plt.xlabel('Predicted')
+plt.title('Confusion Matrix')
+plt.show()
+```
+
+#### ROC Curve
+
+```py
+from sklearn.metrics import roc_curve, auc
+
+# Calculate ROC curve
+fpr, tpr, thresholds = roc_curve(y_test, model.predict_proba(X_test)[:, 1])
+roc_auc = auc(fpr, tpr)
+
+# Plot ROC curve
+plt.figure(figsize=(8, 6))
+plt.plot(fpr, tpr, color='blue', label='ROC curve (area = {:.2f})'.format(roc_auc))
+plt.plot([0, 1], [0, 1], color='red', linestyle='--')
+plt.xlim([0.0, 1.0])
+plt.ylim([0.0, 1.05])
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('Receiver Operating Characteristic (ROC) Curve')
+plt.legend(loc='lower right')
+plt.show()
+```
+
+#### Precision-Recall Curve
+
+```py
+from sklearn.metrics import precision_recall_curve
+
+# Calculate precision and recall
+precision, recall, _ = precision_recall_curve(y_test, model.predict_proba(X_test)[:, 1])
+
+# Plot Precision-Recall curve
+plt.figure(figsize=(8, 6))
+plt.plot(recall, precision, color='blue')
+plt.xlabel('Recall')
+plt.ylabel('Precision')
+plt.title('Precision-Recall Curve')
+plt.show()
+```
