@@ -1,4 +1,5 @@
 # First we explore the data
+import matplotlib.pyplot as plt
 import code
 import json
 import pandas as pd
@@ -57,7 +58,8 @@ def load_data(use_boruta_features_only: bool = False):
     Load gene expression data and split into test/train
     Returns:
     """
-    df = pd.read_csv("./G12/G12_breast_gene-expr.csv")
+    # df = pd.read_csv("./G12/G12_breast_gene-expr.csv")
+    df = pd.read_csv("./G12/G12_breast_dna-meth.csv")
 
     # We drop the first column since it is just sample identifiers, not useful for machine learning
     df = df.drop(df.columns[0], axis=1)
@@ -82,10 +84,16 @@ def load_data(use_boruta_features_only: bool = False):
     return X, y
 
 
-def logistic_regression(X, y):
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
+X, y = load_data()
+class_labels = y
+
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
+
+
+def logistic_regression():
 
     from sklearn.linear_model import LogisticRegression
 
@@ -105,9 +113,10 @@ def logistic_regression(X, y):
     print(f"Accuracy: {accuracy:.2f}")
     print("Classification Report:")
     print(report)
+    return y_pred
 
 
-def random_forest(X, y):
+def random_forest():
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.metrics import accuracy_score, classification_report
 
@@ -128,7 +137,7 @@ def random_forest(X, y):
     report = classification_report(y_test, y_pred)
     print("Classification Report:")
     print(report)
-    return model
+    return y_pred, model
 
 
 def run_boruta(estimator):
@@ -146,7 +155,7 @@ def run_boruta(estimator):
     print(selected_features)
 
 
-def forwardfeed_neural_net(X, y):
+def forwardfeed_neural_net():
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
@@ -223,37 +232,151 @@ def forwardfeed_neural_net(X, y):
     print("Classification Report:")
     print(report)
 
+    return y_test_pred_numpy
+
 
 # ==================================
 # Run all the models
 
 boruta_feats = load_boruta_features()
 
+# model result for graph
+model_results = []
+
 print(f"\n=== Logistic Regression (all features) ===\n")
 X, y = load_data()
-logistic_regression(X, y)
 
-print(f"\n=== Logistic Regression (boruta features only = {len(boruta_feats)}) ===\n")
-X, y = load_data(use_boruta_features_only=True)
-logistic_regression(X, y)
+y_pred = logistic_regression()
+model_results.append({"model": "Logistic Regression", "y_pred": y_pred})
+
+
+# print(f"\n=== Logistic Regression (boruta features only = {len(boruta_feats)}) ===\n")
+# X, y = load_data(use_boruta_features_only=True)
+# logistic_regression(X, y)
 
 print(f"\n=== Random Forest (all features) ===\n")
-X, y = load_data()
-random_forest(X, y)
+y_pred, rf = random_forest()
+model_results.append({"model": "Random Forest", "y_pred": y_pred})
 
-print(f"\n=== Random Forest (boruta features only = {len(boruta_feats)}) ===\n")
-X, y = load_data(use_boruta_features_only=True)
-random_forest(X, y)
+# print(f"\n=== Random Forest (boruta features only = {len(boruta_feats)}) ===\n")
+# X, y = load_data(use_boruta_features_only=True)
+# random_forest(X, y)
 
 print(f"\n=== Fowrard Feed Neural Network (all features) ===\n")
 X, y = load_data()
-forwardfeed_neural_net(X, y)
+y_pred = forwardfeed_neural_net()
+model_results.append({"model": "Neural Network", "y_pred": y_pred})
 
-print(
-    f"\n=== Fowrard Feed Neural Network (boruta features only = {len(boruta_feats)}) ===\n"
+print(y_pred)
+report_list = []
+
+for model_data in model_results:
+    model_name = model_data["model"]
+    y_pred = model_data["y_pred"]
+    report = classification_report(
+        y_test, y_pred, output_dict=True
+    )  # Get report as a dictionary
+    report_df = pd.DataFrame(report).transpose()  # Convert to DataFrame and transpose
+    report_df["Model"] = model_name  # Add model name as a column
+    report_list.append(report_df)
+
+final_report = pd.concat(report_list)
+
+# Reset index for better plotting
+final_report.reset_index(inplace=True)
+
+# Define metrics to plot
+metrics = ["precision", "recall", "f1-score"]
+
+# Create a new DataFrame for plotting
+plot_data = final_report[
+    final_report["index"].isin(["0", "1"])
+]  # Keep only class metrics
+plot_data = plot_data.pivot(index="Model", columns="index", values=metrics)
+
+# Create a new DataFrame for plotting
+plot_data = final_report[
+    final_report["index"].isin(["0", "1"])
+]  # Keep only class metrics
+plot_data = plot_data.pivot(index="Model", columns="index", values=metrics)
+
+# Map class indices to class names
+class_labels = {0: "Solid Tissue Normal", 1: "Primary Tumor"}
+
+# Rename columns to include class names
+plot_data.columns = pd.MultiIndex.from_tuples(
+    [(metric, class_labels[int(cls)]) for metric, cls in plot_data.columns]
 )
-X, y = load_data(use_boruta_features_only=True)
-forwardfeed_neural_net(X, y)
+
+for i, metric in enumerate(metrics):
+    # Create a new figure for each metric
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    # Plot the data
+    plot_data[metric].plot(kind="bar", ax=ax, color=["orange", "green"], legend=True)
+
+    metric_data = plot_data[metric]
+    bars = metric_data.plot(kind="bar", ax=ax, color=["orange", "green"], legend=True)
+
+    for bar in bars.patches:
+        ax.annotate(
+            f"{bar.get_height():.2f}",
+            (bar.get_x() + bar.get_width() / 2, bar.get_height() - 0.05),
+            ha="center",
+            va="bottom",
+            fontsize=10,
+        )
+
+    ax.set_title(f"{metric.capitalize()} by Model")
+    ax.set_xlabel("Models")
+    ax.set_ylabel(metric.capitalize())
+    ax.set_ylim(0, 1)  # Set y-axis limits from 0 to 1
+    ax.grid(axis="y")
+    ax.legend(title="Classes", loc="lower right")
+
+    # Adjust layout
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+
+    # Show the figure
+    # plt.show()
+    plt.savefig(f"figs/{metric.capitalize()}")
+
+
+## Create subplots for each metric
+# num_metrics = len(metrics)
+# fig, axes = plt.subplots(1, num_metrics, figsize=(18, 6))
+#
+# for i, metric in enumerate(metrics):
+#    plot_data[metric].plot(
+#        kind="bar", ax=axes[i], color=["orange", "green"], legend=True
+#    )
+#    metric_data = plot_data[metric]
+#    bars = metric_data.plot(kind='bar', ax=axes[i], color=['orange', 'green'], legend=True)
+#
+#    for bar in bars.patches:
+#        axes[i].annotate(
+#            f"{bar.get_height():.2f}",
+#            (bar.get_x() + bar.get_width() / 2, bar.get_height() - 0.05),
+#            ha="center",
+#            va="bottom",
+#            fontsize=10,
+#        )
+#    axes[i].set_title(f"{metric.capitalize()} by Model")
+#    axes[i].set_xlabel("Models")
+#    axes[i].set_ylabel(metric.capitalize())
+#    axes[i].set_ylim(0, 1)  # Set y-axis limits from 0 to 1
+#    axes[i].grid(axis="y")
+#    axes[i].legend(title="Classes", loc="lower right")
+#
+## Adjust layout
+# plt.xticks(rotation=45)
+# plt.tight_layout()
+#
+# plt.show()
+
+# X, y = load_data(use_boruta_features_only=True)
+# forwardfeed_neural_net(X, y)
 
 # rf = random_forest()
 # Warning: This takes a very long time. Let's preprocess

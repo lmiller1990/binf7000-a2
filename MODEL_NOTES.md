@@ -6,6 +6,12 @@ I ran three models for the gene expression dataset:
 
 Output is below. I also ran Boruta on a subset of the features (running on all 20000 will take many hours, so I excluded the bottom 50% with low gene expression to see if it makes a difference - it seems to help both the logistic regression and random forest, but not the neural network - more research is needed).
 
+Here's some figures:
+
+![](./figs/Precision.png)
+![](./figs/F1-score.png)
+![](./figs/Recall.png)
+
 At a high level, it looks like logistic regression and random forest are the best bets for gene expression. We should try applying the models to the DNA Methylation data set, too.
 
 You can run it by getting the code and running `python model.py`. Make sure you install the dependencies with `pip install -r requirements.txt`, see the [README.md]('./README.md') for more information.
