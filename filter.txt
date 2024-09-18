@@ -1,0 +1,5 @@
+RNA_seq_mean = RNA_seq.iloc[:, 2:].mean()
+RNA_seq_mean = pd.DataFrame({'Gene': RNA_seq_mean.index, 'Mean': RNA_seq_mean.values})
+RNA_seq_mean_sorted = RNA_seq_mean['Mean'].sort_values()
+RNA_seq_mean_sorted_filtered = RNA_seq_mean_sorted[RNA_seq_mean_sorted > 0.01]
+print(RNA_seq_mean_sorted_filtered)
