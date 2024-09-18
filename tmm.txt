@@ -1,0 +1,33 @@
+
+#Normalization of rna expression data using TMM
+#import TMM rnanorm
+from rnanorm import TMM
+
+#rna_file is a variable to read your csv file
+rna_exp.head()
+
+exp_data = rna_exp.iloc[:, 2:]
+
+tmm = TMM().fit(exp_data)
+
+norm_factors = tmm.get_norm_factors(exp_data)
+print("normalization factors:")
+print(norm_factors)
+
+normalized_array = tmm.transform(exp_data)
+print("normalized data:")
+print(normalized_array)
+
+# Convert the NumPy array to a DataFrame
+normalized_data = pd.DataFrame(normalized_array, index=exp_data.index, columns=exp_data.columns)
+print("Normalized Data:")
+print(normalized_data)
+
+#concatenate the sampleIDs and labels back with normalized data
+sampleID = rna_exp.iloc[:, 0] #extract the first column
+labels = rna_exp.iloc[:, 1] #extract the second column
+
+concatenate = pd.concat([sampleID, labels, normalized_data], axis=1)
+concatenate.columns = ['Sample', 'Label'] + list(normalized_data.columns)
+print("Normalized data with Sample and Label:")
+print(concatenate)
