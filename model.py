@@ -4,79 +4,77 @@ import code
 import json
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from boruta import BorutaPy
+import rnanorm
 
 import torch
 import torch.nn as nn
+from rnanorm import TMM
 import torch.optim as optim
 from sklearn.metrics import accuracy_score, classification_report
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
+from test import test
+
+pd.set_option("display.max_rows", None)
+
+top_n = 10
 
 
-def load_boruta_features():
-    with open("./boruta_features/0ab8afba6aea0002289ca6fda41790a6de0cef02") as f:
-        data = json.loads(f.read())
-        return data["features"]
-
-
-def drop_features_below_threshold(df, percent):
-    """Drop a percentage of features based on value
-    Eg: 0.7 will drop the bottom 70% of features,
-    leaving the remaining 30%.
-
-    Params:
-        percent: float (0 - 1)
-
-
-    Usage:
-        df = drop_features_below_threshold(df, percent=0.8)
-    """
-
-    percent = min(percent, 1)
-
-    # ignore labels
-    feature_df = df.iloc[:, 1:]
-
-    mean_values = feature_df.mean()
-
-    # determine the number of columns to drop
-    num_columns_to_drop = int(len(mean_values) * (percent / 100))
-
-    # get the columns to drop based on the lowest mean values
-    columns_to_drop = mean_values.nsmallest(num_columns_to_drop).index.tolist()
-
-    df_trimmed = df.drop(columns=columns_to_drop)
-    print(f"Dropped columns: {len(columns_to_drop)} out of {len(df.columns)}")
-
-    return df_trimmed
-
-
-def load_data(use_boruta_features_only: bool = False):
+def load_gene_expression_data(dataset):
     """
     Load gene expression data and split into test/train
+    Params:
+        dataset - csv of data to load.
     Returns:
+        X - training data
+        y - labels
     """
-    # df = pd.read_csv("./G12/G12_breast_gene-expr.csv")
-    df = pd.read_csv("./G12/G12_breast_dna-meth.csv")
+    df = pd.read_csv(dataset) 
 
     # We drop the first column since it is just sample identifiers, not useful for machine learning
     df = df.drop(df.columns[0], axis=1)
-
-    if use_boruta_features_only:
-        # exclude any non boruta selected features!
-        features = load_boruta_features()
-        df = df[["Label"] + features]
+    df = df.dropna(axis=1)
 
     # Drop the label "Tumour" or "Normal Tissue" from the feature set.
     # The whole point is the features do **not** include the "answer"
     X = df.drop(df.columns[0], axis=1)
 
-    print(f"Features: {df.shape[1]}")
+    # now we do the TMM normalization
+    tmm = TMM().fit(X)
+    norm_factors = tmm.get_norm_factors(X)
+    normalized_array = tmm.transform(X)
+    normalized_data = pd.DataFrame(normalized_array, index=X.index, columns=X.columns)
 
     # y is the labels. This is **only** the Tumour or Normal Tissue labels.
-    y = df["Label"]  # Labels
+    y = df["Label"]
+
+    # Convert labels to numeric values.
+    y = y.map({"Primary Tumor": 1, "Solid Tissue Normal": 0})
+
+    return normalized_data, y
+
+
+def load_dna_meth_data(dataset):
+    """
+    Load data meth data and split into test/train
+    Params:
+        dataset - csv of data to load.
+    Returns:
+        X - training data
+        y - labels
+    """
+    df = pd.read_csv(dataset)
+
+    # We drop the first column since it is just sample identifiers, not useful for machine learning
+    df = df.drop(df.columns[0], axis=1)
+    df = df.dropna(axis=1)
+
+    # Drop the label "Tumour" or "Normal Tissue" from the feature set.
+    # The whole point is the features do **not** include the "answer"
+    X = df.drop(df.columns[0], axis=1)
+
+    y = df["Label"]
 
     # Convert labels to numeric values.
     y = y.map({"Primary Tumor": 1, "Solid Tissue Normal": 0})
@@ -84,17 +82,7 @@ def load_data(use_boruta_features_only: bool = False):
     return X, y
 
 
-X, y = load_data()
-class_labels = y
-
-
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42, stratify=y
-)
-
-
-def logistic_regression():
-
+def logistic_regression(X_train, X_test, y_train, y_test):
     from sklearn.linear_model import LogisticRegression
 
     # new model instance
@@ -113,10 +101,31 @@ def logistic_regression():
     print(f"Accuracy: {accuracy:.2f}")
     print("Classification Report:")
     print(report)
-    return y_pred
+    # Get feature coefficients
+    coefficients = model.coef_[0]  # Get the coefficients for the first class
+    feature_importances = pd.DataFrame(
+        {
+            "Feature": X_train.columns,  # Assuming X_train is a DataFrame
+            "Coefficient": coefficients,
+        }
+    )
+
+    # Sort the DataFrame by the absolute value of coefficients
+    feature_importances["Absolute Coefficient"] = feature_importances[
+        "Coefficient"
+    ].abs()
+    feature_importances = feature_importances.sort_values(
+        by="Absolute Coefficient", ascending=False
+    )
+
+    # Get the top N features
+    top_features = feature_importances.head(top_n)
+    print("Top N Features (Logistic Regression):")
+    print(top_features)
+    return y_pred, top_features["Feature"]
 
 
-def random_forest():
+def random_forest(X_train, X_test, y_train, y_test):
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.metrics import accuracy_score, classification_report
 
@@ -124,7 +133,7 @@ def random_forest():
         X, y, test_size=0.2, random_state=42, stratify=y
     )
 
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model = RandomForestClassifier(n_estimators=400, random_state=42)
     model.fit(X_train, y_train)
 
     # Make predictions on the test set
@@ -137,45 +146,46 @@ def random_forest():
     report = classification_report(y_test, y_pred)
     print("Classification Report:")
     print(report)
-    return y_pred, model
+    # Get feature importances
+    importances = model.feature_importances_
 
-
-def run_boruta(estimator):
-    boruta_selector = BorutaPy(
-        estimator=estimator,
-        n_estimators="auto",  # type: ignore based on estimator
-        verbose=2,
-        random_state=42,
+    # Create a DataFrame for feature importances
+    feature_importances = pd.DataFrame(
+        {
+            "Feature": X_train.columns,  # Assuming X_train is a DataFrame
+            "Importance": importances,
+        }
     )
 
-    boruta_selector.fit(X.values, y.values)
-    selected_features = X.columns[boruta_selector.support_].to_list()
-
-    print("Selected Features:")
-    print(selected_features)
-
-
-def forwardfeed_neural_net():
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
+    # Sort the DataFrame by importance
+    feature_importances = feature_importances.sort_values(
+        by="Importance", ascending=False
     )
 
-    # Standardize the features
+    # Get the top N features
+    top_features = feature_importances.head(top_n)
+    print("Top N Features (Random Forest):")
+    print(top_features)
+    rf_feats = top_features["Feature"]
+    return y_pred, model, rf_feats
+
+
+def forwardfeed_neural_net(X_train, X_test, y_train, y_test):
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
 
-    # Convert to PyTorch tensors
+    # convert to PyTorch tensors for compat
     X_train_tensor = torch.FloatTensor(X_train_scaled)
     y_train_tensor = torch.FloatTensor(y_train.values)
     X_test_tensor = torch.FloatTensor(X_test_scaled)
     y_test_tensor = torch.FloatTensor(y_test.values)
 
-    # Create DataLoader
+    # loading
     train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 
-    # Define the neural network model
+    # copy pasted this from the net
     class SimpleNN(nn.Module):
         def __init__(self, input_size):
             super(SimpleNN, self).__init__()
@@ -189,23 +199,23 @@ def forwardfeed_neural_net():
             x = torch.sigmoid(self.fc3(x))  # Sigmoid for binary classification
             return x
 
-    # Initialize the model
     input_size = X_train_scaled.shape[1]  # Number of features
+    print(">>>>>>>>>", input_size)
     model = SimpleNN(input_size)
 
-    # Define loss function and optimizer
-    criterion = nn.BCELoss()  # Binary Cross-Entropy Loss
+    criterion = (
+        nn.BCELoss()
+    )  # Binary Cross-Entropy Loss - TODO: What does this even do? Grabbed from the docs, seems to work
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-    # Train the model
     num_epochs = 100
     for epoch in range(num_epochs):
         for batch_X, batch_y in train_loader:
-            optimizer.zero_grad()  # Clear gradients
-            outputs = model(batch_X).squeeze()  # Forward pass
+            optimizer.zero_grad()
+            outputs = model(batch_X).squeeze()
             loss = criterion(outputs, batch_y)  # Compute loss
-            loss.backward()  # Backward pass
-            optimizer.step()  # Update weights
+            loss.backward()
+            optimizer.step()
 
         if (epoch + 1) % 10 == 0:
             print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}")
@@ -235,149 +245,119 @@ def forwardfeed_neural_net():
     return y_test_pred_numpy
 
 
-# ==================================
-# Run all the models
+def run_all_models(X, y, label, outdir):
+    print(f"\n=== Running for dataset: {label} ===\n")
+    # ==================================
+    # Run all the models
+    # model result for graph
+    model_results = []
 
-boruta_feats = load_boruta_features()
+    print(f"\n=== Logistic Regression ===\n")
+    class_labels = y
 
-# model result for graph
-model_results = []
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
 
-print(f"\n=== Logistic Regression (all features) ===\n")
-X, y = load_data()
+    y_pred, lg_feats = logistic_regression(X_train, X_test, y_train, y_test)
+    model_results.append({"model": "Logistic Regression", "y_pred": y_pred})
 
-y_pred = logistic_regression()
-model_results.append({"model": "Logistic Regression", "y_pred": y_pred})
+    print(f"\n=== Random Forest ===\n")
+    y_pred, rf, rf_feats = random_forest(X_train, X_test, y_train, y_test)
+    model_results.append({"model": "Random Forest", "y_pred": y_pred})
 
+    print(f"\n=== Forward Feed Neural Network ===\n")
+    y_pred = forwardfeed_neural_net(X_train, X_test, y_train, y_test)
+    model_results.append({"model": "Neural Network", "y_pred": y_pred})
 
-# print(f"\n=== Logistic Regression (boruta features only = {len(boruta_feats)}) ===\n")
-# X, y = load_data(use_boruta_features_only=True)
-# logistic_regression(X, y)
+    report_list = []
 
-print(f"\n=== Random Forest (all features) ===\n")
-y_pred, rf = random_forest()
-model_results.append({"model": "Random Forest", "y_pred": y_pred})
+    for model_data in model_results:
+        model_name = model_data["model"]
+        y_pred = model_data["y_pred"]
+        report = classification_report(
+            y_test, y_pred, output_dict=True
+        )  # Get report as a dictionary
+        report_df = pd.DataFrame(
+            report
+        ).transpose()  # Convert to DataFrame and transpose
+        report_df["Model"] = model_name  # Add model name as a column
+        report_list.append(report_df)
 
-# print(f"\n=== Random Forest (boruta features only = {len(boruta_feats)}) ===\n")
-# X, y = load_data(use_boruta_features_only=True)
-# random_forest(X, y)
+    final_report = pd.concat(report_list)
 
-print(f"\n=== Fowrard Feed Neural Network (all features) ===\n")
-X, y = load_data()
-y_pred = forwardfeed_neural_net()
-model_results.append({"model": "Neural Network", "y_pred": y_pred})
+    # Reset index for better plotting
+    final_report.reset_index(inplace=True)
 
-print(y_pred)
-report_list = []
+    # Define metrics to plot
+    metrics = ["precision", "recall", "f1-score"]
 
-for model_data in model_results:
-    model_name = model_data["model"]
-    y_pred = model_data["y_pred"]
-    report = classification_report(
-        y_test, y_pred, output_dict=True
-    )  # Get report as a dictionary
-    report_df = pd.DataFrame(report).transpose()  # Convert to DataFrame and transpose
-    report_df["Model"] = model_name  # Add model name as a column
-    report_list.append(report_df)
+    # Create a new DataFrame for plotting
+    plot_data = final_report[
+        final_report["index"].isin(["0", "1"])
+    ]  # Keep only class metrics
+    plot_data = plot_data.pivot(index="Model", columns="index", values=metrics)
 
-final_report = pd.concat(report_list)
+    # Create a new DataFrame for plotting
+    plot_data = final_report[
+        final_report["index"].isin(["0", "1"])
+    ]  # Keep only class metrics
+    plot_data = plot_data.pivot(index="Model", columns="index", values=metrics)
 
-# Reset index for better plotting
-final_report.reset_index(inplace=True)
+    # Map class indices to class names
+    class_labels = {0: "Solid Tissue Normal", 1: "Primary Tumor"}
 
-# Define metrics to plot
-metrics = ["precision", "recall", "f1-score"]
+    # Rename columns to include class names
+    plot_data.columns = pd.MultiIndex.from_tuples(
+        [(metric, class_labels[int(cls)]) for metric, cls in plot_data.columns]
+    )
 
-# Create a new DataFrame for plotting
-plot_data = final_report[
-    final_report["index"].isin(["0", "1"])
-]  # Keep only class metrics
-plot_data = plot_data.pivot(index="Model", columns="index", values=metrics)
+    for i, metric in enumerate(metrics):
+        # Create a new figure for each metric
+        fig, ax = plt.subplots(figsize=(6, 6))
 
-# Create a new DataFrame for plotting
-plot_data = final_report[
-    final_report["index"].isin(["0", "1"])
-]  # Keep only class metrics
-plot_data = plot_data.pivot(index="Model", columns="index", values=metrics)
-
-# Map class indices to class names
-class_labels = {0: "Solid Tissue Normal", 1: "Primary Tumor"}
-
-# Rename columns to include class names
-plot_data.columns = pd.MultiIndex.from_tuples(
-    [(metric, class_labels[int(cls)]) for metric, cls in plot_data.columns]
-)
-
-for i, metric in enumerate(metrics):
-    # Create a new figure for each metric
-    fig, ax = plt.subplots(figsize=(6, 6))
-
-    # Plot the data
-    plot_data[metric].plot(kind="bar", ax=ax, color=["orange", "green"], legend=True)
-
-    metric_data = plot_data[metric]
-    bars = metric_data.plot(kind="bar", ax=ax, color=["orange", "green"], legend=True)
-
-    for bar in bars.patches:
-        ax.annotate(
-            f"{bar.get_height():.2f}",
-            (bar.get_x() + bar.get_width() / 2, bar.get_height() - 0.05),
-            ha="center",
-            va="bottom",
-            fontsize=10,
+        # Plot the data
+        plot_data[metric].plot(
+            kind="bar", ax=ax, color=["orange", "green"], legend=True
         )
 
-    ax.set_title(f"{metric.capitalize()} by Model")
-    ax.set_xlabel("Models")
-    ax.set_ylabel(metric.capitalize())
-    ax.set_ylim(0, 1)  # Set y-axis limits from 0 to 1
-    ax.grid(axis="y")
-    ax.legend(title="Classes", loc="lower right")
+        metric_data = plot_data[metric]
+        bars = metric_data.plot(
+            kind="bar", ax=ax, color=["orange", "green"], legend=True
+        )
 
-    # Adjust layout
-    plt.xticks(rotation=45)
-    plt.tight_layout()
+        for bar in bars.patches:
+            ax.annotate(
+                f"{bar.get_height():.2f}",
+                (bar.get_x() + bar.get_width() / 2, bar.get_height() - 0.05),
+                ha="center",
+                va="bottom",
+                fontsize=10,
+            )
 
-    # Show the figure
-    # plt.show()
-    plt.savefig(f"figs/{metric.capitalize()}")
+        ax.set_title(f"{metric.capitalize()} {label}")
+        ax.set_xlabel("Models")
+        ax.set_ylabel(metric.capitalize())
+        ax.set_ylim(0, 1)  # Set y-axis limits from 0 to 1
+        ax.grid(axis="y")
+        ax.legend(title="Classes", loc="lower right")
+
+        # Adjust layout
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+
+        plt.savefig(f"figs/{outdir}_{metric.capitalize()}")
 
 
-## Create subplots for each metric
-# num_metrics = len(metrics)
-# fig, axes = plt.subplots(1, num_metrics, figsize=(18, 6))
-#
-# for i, metric in enumerate(metrics):
-#    plot_data[metric].plot(
-#        kind="bar", ax=axes[i], color=["orange", "green"], legend=True
-#    )
-#    metric_data = plot_data[metric]
-#    bars = metric_data.plot(kind='bar', ax=axes[i], color=['orange', 'green'], legend=True)
-#
-#    for bar in bars.patches:
-#        axes[i].annotate(
-#            f"{bar.get_height():.2f}",
-#            (bar.get_x() + bar.get_width() / 2, bar.get_height() - 0.05),
-#            ha="center",
-#            va="bottom",
-#            fontsize=10,
-#        )
-#    axes[i].set_title(f"{metric.capitalize()} by Model")
-#    axes[i].set_xlabel("Models")
-#    axes[i].set_ylabel(metric.capitalize())
-#    axes[i].set_ylim(0, 1)  # Set y-axis limits from 0 to 1
-#    axes[i].grid(axis="y")
-#    axes[i].legend(title="Classes", loc="lower right")
-#
-## Adjust layout
-# plt.xticks(rotation=45)
-# plt.tight_layout()
-#
-# plt.show()
 
-# X, y = load_data(use_boruta_features_only=True)
-# forwardfeed_neural_net(X, y)
+X, y = load_gene_expression_data("./G12/G12_breast_gene-expr.csv")
+run_all_models(X, y, "Gene data", "gene")
 
-# rf = random_forest()
-# Warning: This takes a very long time. Let's preprocess
-# run_boruta(rf)
+X, y = load_dna_meth_data("./G12/G12_breast_dna-meth.csv")
+run_all_models(X, y, "DNA Methylation", "meth")
+
+# X, y = load_gene_expression_data("./G12/mystery_gene-expr.csv")
+# run_all_models(X, y, "Gene data (Mystery)", "gene")
+# 
+# X, y = load_dna_meth_data("./G12/mystery_dna-meth.csv")
+# run_all_models(X, y, "DNA Methylation (Mystery)", "meth")
